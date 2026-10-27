@@ -1,0 +1,395 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum DocumentSource {
+  MANUAL_UPLOAD
+  GOOGLE_DRIVE
+}
+
+enum ProcessingStatus {
+  UPLOADED
+  QUEUED
+  PROCESSING
+  COMPLETED
+  COMPLETED_WITH_WARNINGS
+  FAILED
+  CANCELLED
+}
+
+enum ExtractionMode {
+  AUTO
+  FAST_TEXT
+  OCR_SCANNED
+  TABLE_FORM
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIAL
+  CANCELLED
+  PAST_DUE
+  EXPIRED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model User {
+  id              String            @id @default(uuid())
+  email           String            @unique
+  passwordHash    String
+  name            String?
+  role            UserRole          @default(USER)
+  isActive        Boolean           @default(true)
+  isEmailVerified Boolean           @default(false)
+  avatarUrl       String?
+  company         String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  sessions        Session[]
+  documents       Document[]
+  batches         ProcessingBatch[]
+  subscriptions   Subscription[]
+  payments        Payment[]
+  templates       ExtractionTemplate[]
+  usageLedgers    UsageLedger[]
+  apiKeys         ApiKey[]
+  webhooks        WebhookEndpoint[]
+  supportTickets  SupportTicket[]
+  liveChatMessages LiveChatMessage[]
+
+  @@index([email])
+  @@index([role])
+}
+
+model Session {
+  id         String   @id @default(uuid())
+  userId     String
+  tokenHash  String   @unique
+  ipAddress  String?
+  userAgent  String?
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Plan {
+  id            String         @id @default(uuid())
+  name          String
+  slug          String         @unique
+  price         Int            @default(0) // In INR
+  currency      String         @default("INR")
+  billingPeriod String         @default("monthly")
+  pageQuota     Int            @default(10)
+  ocrQuota      Int            @default(0)
+  maxFileSizeMb Int            @default(10)
+  features      Json
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id                 String             @id @default(uuid())
+  userId             String
+  planId             String
+  status             SubscriptionStatus @default(ACTIVE)
+  currentPeriodStart DateTime           @default(now())
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd  Boolean            @default(false)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan               Plan               @relation(fields: [planId], references: [id])
+  payments           Payment[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Payment {
+  id             String         @id @default(uuid())
+  userId         String
+  subscriptionId String?
+  provider       String         @default("RAZORPAY")
+  orderId        String?        @unique
+  paymentId      String?        @unique
+  amount         Int
+  currency       String         @default("INR")
+  status         PaymentStatus  @default(SUCCESS)
+  invoiceUrl     String?
+  receiptNumber  String?
+  createdAt      DateTime       @default(now())
+
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription   Subscription?  @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([status])
+}
+
+model ProcessingBatch {
+  id             String           @id @default(uuid())
+  userId         String
+  name           String
+  totalDocuments Int              @default(0)
+  completedCount Int              @default(0)
+  failedCount    Int              @default(0)
+  status         ProcessingStatus @default(PROCESSING)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents      Document[]
+
+  @@index([userId])
+}
+
+model Document {
+  id                   String            @id @default(uuid())
+  userId               String
+  batchId              String?
+  sourceType           DocumentSource    @default(MANUAL_UPLOAD)
+  originalFileName     String
+  mimeType             String            @default("application/pdf")
+  fileSize             BigInt
+  pageCount            Int?
+  storageKey           String
+  driveFileId          String?
+  status               ProcessingStatus  @default(UPLOADED)
+  extractionMode       ExtractionMode    @default(AUTO)
+  processingDurationMs Int?
+  errorMessage         String?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  user                 User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  batch                ProcessingBatch?  @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  results              ExtractionResult[]
+  jobs                 ProcessingJob[]
+  usageLedgers         UsageLedger[]
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+model ProcessingJob {
+  id             String           @id @default(uuid())
+  documentId     String
+  attemptCount   Int              @default(1)
+  processingMode ExtractionMode   @default(AUTO)
+  status         ProcessingStatus @default(QUEUED)
+  queuedAt       DateTime         @default(now())
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  errorMessage   String?
+
+  document       Document         @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@index([status])
+}
+
+model ExtractionResult {
+  id              String   @id @default(uuid())
+  documentId      String
+  version         Int      @default(1)
+  data            Json
+  schemaValid     Boolean  @default(true)
+  warnings        Json?
+  confidenceScore Float    @default(0.95)
+  createdAt       DateTime @default(now())
+
+  document        Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, version])
+  @@index([documentId])
+}
+
+model ExtractionTemplate {
+  id           String   @id @default(uuid())
+  userId       String?
+  name         String
+  description  String?
+  isSystem     Boolean  @default(false)
+  schema       Json
+  sampleFields Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user         User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isSystem])
+}
+
+model UsageLedger {
+  id         String   @id @default(uuid())
+  userId     String
+  documentId String?
+  pageCount  Int      @default(1)
+  isOcr      Boolean  @default(false)
+  actionType String   @default("SETTLE") // RESERVE, SETTLE, RELEASE
+  notes      String?
+  createdAt  DateTime @default(now())
+
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  document   Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+}
+
+model ApiKey {
+  id         String    @id @default(uuid())
+  userId     String
+  label      String
+  keyPrefix  String
+  keyHash    String    @unique
+  scopes     Json
+  lastUsedAt DateTime?
+  isRevoked  Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model WebhookEndpoint {
+  id         String            @id @default(uuid())
+  userId     String
+  url        String
+  secret     String
+  events     Json
+  isActive   Boolean           @default(true)
+  createdAt  DateTime          @default(now())
+
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([userId])
+}
+
+model WebhookDelivery {
+  id                String          @id @default(uuid())
+  webhookEndpointId String
+  eventType         String
+  payload           Json
+  statusCode        Int?
+  isSuccess         Boolean         @default(false)
+  attempt           Int             @default(1)
+  createdAt         DateTime        @default(now())
+
+  webhookEndpoint   WebhookEndpoint @relation(fields: [webhookEndpointId], references: [id], onDelete: Cascade)
+
+  @@index([webhookEndpointId])
+}
+
+model SupportTicket {
+  id         String         @id @default(uuid())
+  userId     String
+  ticketId   String         @unique @default(uuid())
+  subject    String
+  category   String         @default("TECHNICAL")
+  priority   TicketPriority @default(MEDIUM)
+  status     TicketStatus   @default(OPEN)
+  messages   Json
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  actorEmail String?
+  action     String
+  resource   String
+  details    Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([action])
+  @@index([createdAt])
+  @@index([actorId])
+}
+
+model LiveChatMessage {
+  id         String   @id @default(uuid())
+  userId     String
+  userEmail  String
+  userName   String?
+  sender     String   // 'USER' | 'ADMIN' | 'BOT'
+  message    String
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model EnterpriseEnquiry {
+  id              String   @id @default(uuid())
+  companyName     String
+  contactName     String
+  email           String
+  phone           String?
+  estimatedVolume String
+  requirements    String
+  status          String   @default("NEW") // NEW, CONTACTED, QUALIFIED, CLOSED
+  createdAt       DateTime @default(now())
+
+  @@index([status])
+}
+
+model SystemSetting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+}

@@ -1,0 +1,14 @@
+{
+  "name": "pdf-json-viewer-platform",
+  "version": "1.0.0",
+  "description": "Complete PDF-to-JSON SaaS Platform (Public Site, User Dashboard, Admin Portal)",
+  "scripts": {
+    "dev:backend": "npm --prefix pdf-json-backend run dev",
+    "dev:frontend": "npm --prefix pdf-json-frontend run dev",
+    "build:backend": "npm --prefix pdf-json-backend run build",
+    "build:frontend": "npm --prefix pdf-json-frontend run build",
+    "seed": "npm --prefix pdf-json-backend run prisma:seed"
+  },
+  "devDependencies": {},
+  "dependencies": {}
+}
